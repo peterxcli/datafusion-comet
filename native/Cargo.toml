@@ -16,8 +16,8 @@
 # under the License.
 
 [workspace]
-default-members = ["core", "spark-expr", "common", "proto", "jni-bridge", "shuffle"]
-members = ["core", "spark-expr", "common", "proto", "jni-bridge", "shuffle"]
+default-members = ["core", "spark-expr", "common", "proto", "jni-bridge", "shuffle", "parquet"]
+members = ["core", "spark-expr", "common", "proto", "jni-bridge", "shuffle", "parquet"]
 # The contrib crate at ../contrib/delta/native is intentionally NOT a workspace member
 # (workspace members must live hierarchically under the workspace root). It's pulled in
 # as a path dep by `core/Cargo.toml` when the `contrib-delta` feature is enabled.
@@ -52,6 +52,7 @@ datafusion-comet-common = { path = "common" }
 datafusion-comet-jni-bridge = { path = "jni-bridge" }
 datafusion-comet-proto = { path = "proto" }
 datafusion-comet-shuffle = { path = "shuffle" }
+datafusion-comet-parquet = { path = "parquet" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 futures = "0.3.32"
 num = "0.4"

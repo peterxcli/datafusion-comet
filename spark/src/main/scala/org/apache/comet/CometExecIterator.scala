@@ -358,6 +358,10 @@ object CometExecIterator extends Logging {
       CometConf.COMET_PARQUET_ROW_FILTER_PUSHDOWN_ENABLED.key,
       CometConf.COMET_PARQUET_ROW_FILTER_PUSHDOWN_ENABLED.get(SQLConf.get).toString)
 
+    builder.putEntries(
+      CometConf.COMET_PARQUET_PREFETCH_BYTES.key,
+      CometConf.COMET_PARQUET_PREFETCH_BYTES.get(SQLConf.get).toString)
+
     builder.build().toByteArray
   }
 

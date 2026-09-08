@@ -4995,9 +4995,7 @@ mod tests {
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::object_store::ObjectStoreUrl;
-    use datafusion::datasource::physical_plan::{
-        FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
-    };
+    use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, FileSource};
     use datafusion::error::DataFusionError;
     use datafusion::logical_expr::AggregateUDF;
     use datafusion::logical_expr::ScalarUDF;
@@ -5008,6 +5006,7 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionConfig;
     use datafusion::{assert_batches_eq, physical_plan::common::collect, prelude::SessionContext};
+    use datafusion_comet_parquet::ParquetSource;
     use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
     use datafusion_spark::function::aggregate::collect::{SparkCollectList, SparkCollectSet};
     use parquet::variant::VariantType;

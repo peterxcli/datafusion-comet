@@ -2003,6 +2003,7 @@ dependencies = [
  "datafusion",
  "datafusion-comet-common",
  "datafusion-comet-jni-bridge",
+ "datafusion-comet-parquet",
  "datafusion-comet-proto",
  "datafusion-comet-shuffle",
  "datafusion-comet-spark-expr",
@@ -2074,6 +2075,34 @@ dependencies = [
  "prost",
  "regex",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "datafusion-comet-parquet"
+version = "1.1.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "bytes",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-datasource",
+ "datafusion-datasource-parquet",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-adapter",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "datafusion-pruning",
+ "futures",
+ "itertools 0.15.0",
+ "log",
+ "object_store",
+ "parquet",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

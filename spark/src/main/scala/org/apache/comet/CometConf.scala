@@ -162,6 +162,19 @@ object CometConf extends ShimCometConf {
       .booleanConf
       .createWithDefault(false)
 
+  val COMET_PARQUET_PREFETCH_BYTES: ConfigEntry[Long] =
+    conf("spark.comet.parquet.prefetchBytes")
+      .category(CATEGORY_PARQUET)
+      .doc(
+        "Maximum additional compressed bytes per native Parquet file stream to fetch " +
+          "while decoding the current row group. Zero disables prefetch. At most one " +
+          "upcoming row group is fetched, and prefetch is skipped if it exceeds this " +
+          "budget or the execution memory pool cannot reserve its bytes. Reading whole " +
+          "projected column chunks may fetch data later discarded by filters.")
+      .bytesConf(ByteUnit.BYTE)
+      .checkValue(_ >= 0, "Parquet prefetch byte budget must be non-negative")
+      .createWithDefault(0L)
+
   val COMET_PARQUET_ROW_FILTER_PUSHDOWN_ENABLED: ConfigEntry[Boolean] =
     conf("spark.comet.parquet.rowFilterPushdown.enabled")
       .category(CATEGORY_PARQUET)

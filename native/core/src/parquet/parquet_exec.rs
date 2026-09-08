@@ -24,9 +24,7 @@ use crate::parquet::schema_adapter::SparkPhysicalExprAdapterFactory;
 use arrow::datatypes::{Field, FieldRef, SchemaRef};
 use datafusion::config::{ParquetOptions, TableParquetOptions};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
-};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, FileSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::physical_expr::expressions::Column;
@@ -34,10 +32,17 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_comet_parquet::ParquetSource;
 use datafusion_comet_spark_expr::EvalMode;
 use datafusion_datasource::TableSchema;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Execution-local options supplied by Spark; kept outside DataFusion configuration.
+#[derive(Debug, Default)]
+pub(crate) struct ParquetScanOptions {
+    pub prefetch_bytes: usize,
+}
 
 /// Initializes a DataSourceExec plan with a ParquetSource for Comet's native Parquet scan.
 ///
@@ -141,7 +146,14 @@ pub(crate) fn init_datasource_exec(
         .with_table_partition_cols(partition_fields)
         .build();
 
+    let prefetch_bytes = session_config
+        .get_extension::<ParquetScanOptions>()
+        .map_or(0, |options| options.prefetch_bytes);
     let mut parquet_source = ParquetSource::new(table_schema)
+        .with_row_group_prefetch(
+            prefetch_bytes,
+            Arc::clone(&session_ctx.runtime_env().memory_pool),
+        )
         .with_table_parquet_options(table_parquet_options)
         .with_metadata_size_hint(512 * 1024); // Same as DataFusion's default
 

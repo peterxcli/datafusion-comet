@@ -363,6 +363,16 @@ object CometMetricNode {
         SQLMetrics.createMetric(sc, "Number of row groups matched by limit pruning (not pruned)"),
       "bytes_scanned" ->
         SQLMetrics.createSizeMetric(sc, "Number of bytes scanned"),
+      "prefetch_bytes" ->
+        SQLMetrics.createSizeMetric(sc, "Bytes returned by Parquet background reads"),
+      "prefetch_row_groups" ->
+        SQLMetrics.createMetric(sc, "Parquet row groups fetched in the background"),
+      "prefetch_budget_skips" ->
+        SQLMetrics.createMetric(
+          sc,
+          "Parquet prefetches skipped by byte budget or memory pressure"),
+      "prefetch_wait_time" ->
+        SQLMetrics.createNanoTimingMetric(sc, "Time waiting for Parquet background reads"),
       "pushdown_rows_pruned" ->
         SQLMetrics.createMetric(sc, "Rows filtered out by predicates pushed into parquet scan"),
       "pushdown_rows_matched" ->

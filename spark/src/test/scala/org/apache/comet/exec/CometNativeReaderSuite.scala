@@ -972,6 +972,45 @@ class CometNativeReaderSuite extends CometTestBase with AdaptiveSparkPlanHelper 
     }
   }
 
+  test("native Parquet prefetch preserves filtered results and reports background reads") {
+    withTempPath { dir =>
+      spark
+        .range(0, 5000)
+        .selectExpr("id", "named_struct('k', id, 'v', cast(id as string)) AS payload")
+        .repartition(1)
+        .write
+        .option("parquet.block.size", "4096")
+        .parquet(dir.toString)
+
+      val file = dir.listFiles().find(_.getName.endsWith(".parquet")).get
+      val reader = ParquetFileReader.open(
+        org.apache.parquet.hadoop.util.HadoopInputFile
+          .fromPath(new Path(file.getAbsolutePath), spark.sessionState.newHadoopConf()))
+      val groups =
+        try reader.getRowGroups.size()
+        finally reader.close()
+      assert(groups > 1, s"Expected multiple row groups, got $groups")
+
+      for (budget <- Seq("0", "1b", "1m"); pushdown <- Seq("false", "true")) {
+        withSQLConf(
+          CometConf.COMET_PARQUET_PREFETCH_BYTES.key -> budget,
+          CometConf.COMET_PARQUET_ROW_FILTER_PUSHDOWN_ENABLED.key -> pushdown) {
+          val df = spark.read.parquet(dir.toString).where("id % 3 = 0").select("id", "payload.v")
+          val (_, cometPlan) = checkSparkAnswerAndOperator(df)
+          val scans = cometPlan.collect { case n: CometNativeScanExec => n }
+          assert(scans.nonEmpty, "Expected native Parquet scan")
+          val bytes = scans.map(_.metrics("prefetch_bytes").value).sum
+          val groupsFetched = scans.map(_.metrics("prefetch_row_groups").value).sum
+          if (budget == "1m") {
+            assert(bytes > 0 && groupsFetched > 0, "Expected background row-group reads")
+          } else {
+            assert(bytes == 0 && groupsFetched == 0, "Prefetch must respect its byte budget")
+          }
+        }
+      }
+    }
+  }
+
   test("row-level pushdown reaches native scan when rowFilterPushdown.enabled is set") {
     // Regression test for #4990: `table_parquet_options.global` never saw session-level
     // `datafusion.execution.parquet.*` settings, so `pushdown_filters`/`reorder_filters` set via
