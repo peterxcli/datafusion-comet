@@ -20,7 +20,7 @@ under the License.
 # Parquet I/O policy POC
 
 This branch pins DataFusion 55.0.0 to implementation commit
-[`943ddfc20`](https://github.com/peterxcli/datafusion/commit/943ddfc209147ebd8022853482009c2827d77b59)
+[`8411b35ba`](https://github.com/peterxcli/datafusion/commit/8411b35ba36cbeed13bd26bbec05c5b3ba206e61)
 in [fork PR #3](https://github.com/peterxcli/datafusion/pull/3). Comet passes
 execution options to `ParquetSource` and exposes the prefetch metrics in Spark.
 The six direct DataFusion dependencies use the same fork revision.
@@ -34,12 +34,19 @@ On a Comet-enabled Spark session, compare these configurations, each with
 | Progressive reads with pushdown | `true` | `false` |
 | Upfront reads with pushdown | `true` | `true` |
 
-Prefetch is disabled by default. Upfront I/O is also disabled by default. Prefetch
-fetches at most one future row group's full output and predicate column chunks,
-subject to its byte budget and the execution memory pool. Upfront demand reads
-fetch those chunks together for the current group. Both can read extra bytes that
-selective filters would otherwise avoid. Compare upfront reads with prefetch
-off/on to isolate overlap while holding fetched chunks constant.
+Prefetch and upfront I/O are disabled by default. Both preserve the page selection
+made at file open, including dictionary pages. Adjacent ranges are merged so
+whole-chunk decoder requests reuse the fetched bytes. Without an offset index,
+they fetch complete column chunks. Upfront reads fetch the current group's
+selected output and predicate pages together before row filtering; prefetch
+fetches at most one future group's selected pages while decoding the current one.
+Both can read pages that later row filtering would skip. The prefetch budget and
+execution memory pool bound its additional compressed bytes.
+
+Compare progressive and upfront reads with prefetch off to isolate the I/O
+policy. Compare upfront reads with prefetch off/on separately to assess overlap.
+DataFusion also exposes the policy as `datafusion.execution.parquet.progressive_io`;
+Comet's upfront flag sets it after applying the table options.
 
 The native reader regression test checks every setting, a tiny prefetch budget,
 and a nested output with a predicate-only column. It verifies Spark-equivalent
@@ -49,12 +56,16 @@ filter empties entire groups.
 
 See the [DataFusion benchmark method and results](https://github.com/peterxcli/datafusion/blob/codex/parquet-io-policy-df55/datafusion/datasource-parquet/IO_POLICY_BENCHMARK.md).
 
-The two DataFusion runs found 6.1–9.7% lower elapsed time from prefetch for random,
-wide, unindexed output when upfront reads held fetched chunks constant. Indexed,
-clustered data exposed a regression: full-chunk fetching read 44.6 times as many
-bytes and took roughly 2.4–3.0 times as long. Disabled-option controls also varied
-against unmodified DataFusion 55. These local results do not establish a stable
-overall speedup; the report includes both matrices and the baseline comparison.
+The updated 2 GiB synthetic matrix passed all 192 scans with matching results
+and byte counts across every policy. Indexed, clustered wide output now requests
+28.9 MB instead of the earlier full-chunk revision's 1.29 GB; upfront demand
+reads reduce reader calls from 513 to 257. A fresh unmodified DF55 control is
+included in the report.
+
+The one-million-row ClickBench sample still showed slower upfront results for
+Q11, Q22, Q24, Q25, and Q26 in both passes. This fixes the experimental reader's
+page-pruning regression; full-dataset measurements and profiling are still needed
+before proposing new defaults.
 
 ## Validation
 

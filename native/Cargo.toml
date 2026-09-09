@@ -43,10 +43,10 @@ arrow-select = { version = "59.2.0" }
 async-trait = { version = "0.1" }
 bytes = { version = "1.11.1" }
 parquet = { version = "59.2.0", default-features = false, features = ["experimental"] }
-datafusion = { git = "https://github.com/peterxcli/datafusion.git", rev = "943ddfc209147ebd8022853482009c2827d77b59", default-features = false, features = ["unicode_expressions", "crypto_expressions", "nested_expressions", "parquet"] }
-datafusion-datasource = { git = "https://github.com/peterxcli/datafusion.git", rev = "943ddfc209147ebd8022853482009c2827d77b59" }
-datafusion-physical-expr-adapter = { git = "https://github.com/peterxcli/datafusion.git", rev = "943ddfc209147ebd8022853482009c2827d77b59" }
-datafusion-spark = { git = "https://github.com/peterxcli/datafusion.git", rev = "943ddfc209147ebd8022853482009c2827d77b59", features = ["core"] }
+datafusion = { git = "https://github.com/peterxcli/datafusion.git", rev = "8411b35ba36cbeed13bd26bbec05c5b3ba206e61", default-features = false, features = ["unicode_expressions", "crypto_expressions", "nested_expressions", "parquet"] }
+datafusion-datasource = { git = "https://github.com/peterxcli/datafusion.git", rev = "8411b35ba36cbeed13bd26bbec05c5b3ba206e61" }
+datafusion-physical-expr-adapter = { git = "https://github.com/peterxcli/datafusion.git", rev = "8411b35ba36cbeed13bd26bbec05c5b3ba206e61" }
+datafusion-spark = { git = "https://github.com/peterxcli/datafusion.git", rev = "8411b35ba36cbeed13bd26bbec05c5b3ba206e61", features = ["core"] }
 datafusion-comet-spark-expr = { path = "spark-expr" }
 datafusion-comet-common = { path = "common" }
 datafusion-comet-jni-bridge = { path = "jni-bridge" }

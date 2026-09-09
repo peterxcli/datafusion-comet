@@ -156,8 +156,8 @@ pub(crate) fn init_datasource_exec(
             options.prefetch_bytes,
             Arc::clone(&session_ctx.runtime_env().memory_pool),
         )
-        .with_progressive_io(!options.upfront_io)
         .with_table_parquet_options(table_parquet_options)
+        .with_progressive_io(!options.upfront_io)
         .with_metadata_size_hint(512 * 1024); // Same as DataFusion's default
 
     if encryption_enabled {
