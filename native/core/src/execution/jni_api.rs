@@ -662,6 +662,16 @@ fn prepare_datafusion_session_context(
             &ScalarValue::Float64(Some(1.1)),
         );
 
+    session_config =
+        session_config.with_extension(Arc::new(crate::parquet::parquet_exec::ParquetScanOptions {
+            prefetch_bytes: spark_config.get_usize(
+                crate::execution::spark_config::COMET_PARQUET_PREFETCH_BYTES,
+                0,
+            ),
+            upfront_io: spark_config
+                .get_bool(crate::execution::spark_config::COMET_PARQUET_UPFRONT_IO_ENABLED),
+        }));
+
     // Translate the Comet-namespaced row-level pushdown flag into the equivalent
     // DataFusion session options. `pushdown_filters` enables the parquet reader's
     // RowFilter evaluation during decode (late materialization); `reorder_filters`

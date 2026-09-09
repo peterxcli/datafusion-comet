@@ -25,6 +25,16 @@ import org.apache.spark.sql.internal.SQLConf
 
 class CometConfSuite extends AnyFunSuite {
 
+  test("Parquet prefetch byte budget accepts units and rejects negative values") {
+    val conf = new SQLConf
+    val entry = CometConf.COMET_PARQUET_PREFETCH_BYTES
+    assert(entry.get(conf) == 0L)
+    conf.setConfString(entry.key, "8m")
+    assert(entry.get(conf) == 8L * 1024 * 1024)
+    conf.setConfString(entry.key, "-1")
+    intercept[IllegalArgumentException](entry.get(conf))
+  }
+
   test("primary key wins over alternative when both are set") {
     val entry = CometConf
       .conf("spark.comet.testing.alias.primaryWins")

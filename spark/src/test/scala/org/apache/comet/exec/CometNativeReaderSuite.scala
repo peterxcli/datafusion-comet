@@ -972,6 +972,55 @@ class CometNativeReaderSuite extends CometTestBase with AdaptiveSparkPlanHelper 
     }
   }
 
+  test("native Parquet prefetch preserves filtered results and reports background reads") {
+    withTempPath { dir =>
+      spark
+        .range(0, 5000)
+        .selectExpr("id", "named_struct('k', id, 'v', cast(id as string)) AS payload")
+        .repartition(1)
+        .sortWithinPartitions("id")
+        .write
+        .option("parquet.block.size", "4096")
+        .parquet(dir.toString)
+
+      val file = dir.listFiles().find(_.getName.endsWith(".parquet")).get
+      val reader = ParquetFileReader.open(
+        org.apache.parquet.hadoop.util.HadoopInputFile
+          .fromPath(new Path(file.getAbsolutePath), spark.sessionState.newHadoopConf()))
+      val groups =
+        try reader.getRowGroups.size()
+        finally reader.close()
+      assert(groups > 1, s"Expected multiple row groups, got $groups")
+
+      val demandBytes = scala.collection.mutable.Map.empty[String, Long]
+      for (budget <- Seq("0", "1b", "1m"); pushdown <- Seq("false", "true");
+        upfront <- Seq("false", "true")) {
+        withSQLConf(
+          CometConf.COMET_PARQUET_UPFRONT_IO_ENABLED.key -> upfront,
+          CometConf.COMET_PARQUET_PREFETCH_BYTES.key -> budget,
+          CometConf.COMET_PARQUET_ROW_FILTER_PUSHDOWN_ENABLED.key -> pushdown) {
+          val df = spark.read.parquet(dir.toString).where("id % 1000 < 10").select("payload.v")
+          val (_, cometPlan) = checkSparkAnswerAndOperator(df)
+          val scans = cometPlan.collect { case n: CometNativeScanExec => n }
+          assert(scans.nonEmpty, "Expected native Parquet scan")
+          if (budget == "0" && pushdown == "true") {
+            demandBytes(upfront) = scans.map(_.metrics("bytes_scanned").value).sum
+          }
+          val bytes = scans.map(_.metrics("prefetch_bytes").value).sum
+          val groupsFetched = scans.map(_.metrics("prefetch_row_groups").value).sum
+          if (budget == "1m") {
+            assert(bytes > 0 && groupsFetched > 0, "Expected background row-group reads")
+          } else {
+            assert(bytes == 0 && groupsFetched == 0, "Prefetch must respect its byte budget")
+          }
+        }
+      }
+      assert(
+        demandBytes("true") > demandBytes("false"),
+        "Upfront I/O must fetch output chunks even for row groups emptied by the filter")
+    }
+  }
+
   test("row-level pushdown reaches native scan when rowFilterPushdown.enabled is set") {
     // Regression test for #4990: `table_parquet_options.global` never saw session-level
     // `datafusion.execution.parquet.*` settings, so `pushdown_filters`/`reorder_filters` set via

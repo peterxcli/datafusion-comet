@@ -24,6 +24,8 @@ pub(crate) const COMET_MAX_TEMP_DIRECTORY_SIZE: &str = "spark.comet.maxTempDirec
 pub(crate) const COMET_DEBUG_MEMORY: &str = "spark.comet.debug.memory";
 pub(crate) const COMET_PARQUET_ROW_FILTER_PUSHDOWN_ENABLED: &str =
     "spark.comet.parquet.rowFilterPushdown.enabled";
+pub(crate) const COMET_PARQUET_PREFETCH_BYTES: &str = "spark.comet.parquet.prefetchBytes";
+pub(crate) const COMET_PARQUET_UPFRONT_IO_ENABLED: &str = "spark.comet.parquet.upfrontIO.enabled";
 pub(crate) const SPARK_EXECUTOR_CORES: &str = "spark.executor.cores";
 
 pub(crate) trait SparkConfig {

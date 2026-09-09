@@ -39,6 +39,13 @@ use datafusion_datasource::TableSchema;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Execution-local options supplied by Spark; kept outside DataFusion configuration.
+#[derive(Debug, Default)]
+pub(crate) struct ParquetScanOptions {
+    pub prefetch_bytes: usize,
+    pub upfront_io: bool,
+}
+
 /// Initializes a DataSourceExec plan with a ParquetSource for Comet's native Parquet scan.
 ///
 ///   `required_schema`: Schema to be projected by the scan.
@@ -141,7 +148,15 @@ pub(crate) fn init_datasource_exec(
         .with_table_partition_cols(partition_fields)
         .build();
 
+    let options = session_config
+        .get_extension::<ParquetScanOptions>()
+        .unwrap_or_default();
     let mut parquet_source = ParquetSource::new(table_schema)
+        .with_row_group_prefetch(
+            options.prefetch_bytes,
+            Arc::clone(&session_ctx.runtime_env().memory_pool),
+        )
+        .with_progressive_io(!options.upfront_io)
         .with_table_parquet_options(table_parquet_options)
         .with_metadata_size_hint(512 * 1024); // Same as DataFusion's default
 
