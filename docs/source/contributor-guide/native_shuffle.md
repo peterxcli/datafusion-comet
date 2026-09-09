@@ -52,7 +52,9 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
    - `HashPartitioning`
    - `RangePartitioning`
    - `SinglePartition`
-   - `RoundRobinPartitioning`
+   - `RoundRobinPartitioning`, which is disabled by default because Comet assigns round robin
+     partitions differently from Spark. Enable it with
+     `spark.comet.shuffle.native.partitioning.roundrobin.enabled`.
 
 4. **Supported partition key types**: For `HashPartitioning` and `RangePartitioning`, partition
    keys must be primitive types. Complex types (struct, array, map) as partition keys require
@@ -84,7 +86,7 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
                     ▼                                     ▼
 ┌───────────────────────────────────┐   ┌───────────────────────────────────┐
 │ MultiPartitionShuffleRepartitioner │   │ SinglePartitionShufflePartitioner │
-│ (hash/range partitioning)          │   │ (single partition case)           │
+│ (hash/range/round-robin)           │   │ (single partition case)           │
 └───────────────────────────────────┘   └───────────────────────────────────┘
                     │
                     ▼
@@ -93,11 +95,12 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
 │ (Arrow IPC + compression)          │
 └───────────────────────────────────┘
                     │
-                    ▼
-         ┌─────────────────┐
-         │  Data + Index   │
-         │     Files       │
-         └─────────────────┘
+            ┌───────┴───────────────────┐
+            ▼                           ▼
+┌──────────────────────┐  ┌──────────────────────────┐
+│ LocalPartitionWriter │  │ RssPartitionWriter       │
+│ (data + index files) │  │ (push to remote shuffle) │
+└──────────────────────┘  └──────────────────────────┘
 ```
 
 ## Key Classes
@@ -115,11 +118,19 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
 
 ### Rust Side
 
-| File                    | Location                             | Description                                                                          |
-| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------ |
-| `shuffle_writer.rs`     | `native/core/src/execution/shuffle/` | `ShuffleWriterExec` plan and partitioners. Main shuffle logic.                       |
-| `codec.rs`              | `native/core/src/execution/shuffle/` | `ShuffleBlockWriter` for Arrow IPC encoding with compression. Also handles decoding. |
-| `comet_partitioning.rs` | `native/core/src/execution/shuffle/` | `CometPartitioning` enum defining partition schemes (Hash, Range, Single).           |
+Native shuffle lives in its own crate, `datafusion-comet-shuffle`, rooted at `native/shuffle/`.
+
+| File                        | Location                            | Description                                                                                                         |
+| --------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `shuffle_writer.rs`         | `native/shuffle/src/`               | `ShuffleWriterExec` plan. Chooses the partitioner and the output destination (`ShuffleWriterDestination`).          |
+| `comet_partitioning.rs`     | `native/shuffle/src/`               | `CometPartitioning` enum defining partition schemes (`SinglePartition`, `Hash`, `RangePartitioning`, `RoundRobin`). |
+| `ipc.rs`                    | `native/shuffle/src/`               | `read_ipc_compressed`, the decode side called over JNI by `Native.decodeShuffleBlock`.                              |
+| `multi_partition.rs`        | `native/shuffle/src/partitioners/`  | `MultiPartitionShuffleRepartitioner`. Assigns partition ids, buffers rows per partition, and spills.                |
+| `single_partition.rs`       | `native/shuffle/src/partitioners/`  | `SinglePartitionShufflePartitioner`. Streams batches straight to the writer.                                        |
+| `empty_schema.rs`           | `native/shuffle/src/partitioners/`  | `EmptySchemaShufflePartitioner`. Row counts only, for zero-column batches such as `COUNT(*)`.                       |
+| `shuffle_block_writer.rs`   | `native/shuffle/src/writers/`       | `ShuffleBlockWriter` and `CompressionCodec`. Arrow IPC encoding with compression.                                   |
+| `local_partition_writer.rs` | `native/shuffle/src/writers/local/` | `LocalPartitionWriter`. Writes the data file plus the index file of partition offsets.                              |
+| `rss_partition_writer.rs`   | `native/shuffle/src/writers/rss/`   | `RssPartitionWriter`. Pushes complete encoded blocks to a remote shuffle service.                                   |
 
 ## Data Flow
 
@@ -142,6 +153,8 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
 3. **Partitioning**: `ShuffleWriterExec` receives batches and routes to the appropriate partitioner:
    - `MultiPartitionShuffleRepartitioner`: For hash/range/round-robin partitioning
    - `SinglePartitionShufflePartitioner`: For single partition (simpler path)
+   - `EmptySchemaShufflePartitioner`: For zero-column input, which carries a row count but no
+     data columns. It overrides whatever partitioning was requested.
 
 4. **Buffering and spilling**: The partitioner buffers rows per partition. When memory pressure
    exceeds the threshold, partitions spill to temporary files.
@@ -151,12 +164,21 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
    - Writes field count header
    - Writes compressed IPC stream
 
-6. **Output files**: Two files are produced:
+6. **Output**: The encoded blocks go to one of two destinations, selected by
+   `ShuffleWriterDestination`. `LocalPartitionWriter` produces two files:
    - **Data file**: Concatenated partition data
    - **Index file**: Array of 8-byte little-endian offsets marking partition boundaries
 
+   `RssPartitionWriter` instead pushes each complete encoded block to a task-owned callback that
+   forwards it to a remote shuffle service, writing no local files. `CometCelebornShuffleManager`
+   wires this path on the JVM side. Block boundaries are never split across pushes, so the service
+   can concatenate payloads without repairing partial blocks. A batch whose encoded frame would
+   exceed `spark.comet.shuffle.rss.maxFrameBytes` is halved and pushed as several complete blocks;
+   the write fails only when a single row still does not fit.
+
 7. **Commit**: Back in JVM, `CometNativeShuffleWriter` reads the index file to get partition
-   lengths and commits via Spark's `IndexShuffleBlockResolver`.
+   lengths and commits via Spark's `IndexShuffleBlockResolver`. The remote path has no index file:
+   it takes partition lengths from the pusher's `finish()` and builds the `MapStatus` from those.
 
 ### Read Path
 
@@ -172,6 +194,11 @@ Native shuffle (`CometExchange`) is selected when all of the following condition
 
 4. Arrow FFI transfers the `RecordBatch` to JVM as a `ColumnarBatch`.
 
+When `spark.comet.shuffle.directRead.enabled` is set (the default) and the shuffle output feeds a
+native operator through an AQE shuffle stage, the exchange serializes as a `ShuffleScan` instead.
+Native code then reads the compressed blocks itself and the Arrow FFI hand-off in step 4 is
+skipped. Types the native scan cannot handle fall back to the path above.
+
 ## Partitioning
 
 ### Hash Partitioning
@@ -180,7 +207,8 @@ Native shuffle implements Spark-compatible hash partitioning:
 
 - Uses Murmur3 hash function with seed 42 (matching Spark)
 - Computes hash of partition key columns
-- Applies modulo by partition count: `partition_id = hash % num_partitions`
+- Applies Spark's positive modulo by partition count: `partition_id = pmod(hash, num_partitions)`.
+  The hash is read as a signed 32-bit value, so `pmod` folds negative remainders back into range.
 
 ### Range Partitioning
 
@@ -202,8 +230,9 @@ batch is written as a single block that may exceed the batch size.
 
 Comet implements round robin partitioning using hash-based assignment for determinism:
 
-1. Computes a Murmur3 hash of columns (using seed 42)
-2. Assigns partitions directly using the hash: `partition_id = hash % num_partitions`
+1. Computes a Murmur3 hash of columns (using seed 42). By default every column is hashed;
+   `spark.comet.shuffle.native.partitioning.roundrobin.maxHashColumns` limits it to the first N.
+2. Assigns partitions directly using the hash: `partition_id = pmod(hash, num_partitions)`
 
 This approach guarantees determinism across retries, which is critical for fault tolerance.
 However, unlike true round robin which cycles through partitions row-by-row, hash-based
@@ -223,11 +252,15 @@ Native shuffle uses DataFusion's memory management with spilling support:
   partition are concatenated when writing the final output.
 - **Scratch space**: Reusable buffers for partition ID computation to reduce allocations.
 
-The `MultiPartitionShuffleRepartitioner` manages:
+The `MultiPartitionShuffleRepartitioner` holds:
 
-- `PartitionBuffer`: In-memory buffer for each partition
-- `SpillFile`: Temporary file for spilled data
-- Memory tracking via `MemoryConsumer` trait
+- `buffered_batches`: input batches kept in memory, with `partition_indices` recording which rows
+  of each batch belong to which output partition
+- `reservation`: a DataFusion `MemoryReservation` registered as a spillable `MemoryConsumer`
+- `scratch`: the reusable partition ID buffers described above
+
+Spilling runs through the partition writer. `LocalPartitionWriter` keeps one `SpillWriter` per
+output partition and merges its spill file into the data file during `finish_partition`.
 
 ## Compression
 
@@ -239,21 +272,31 @@ Native shuffle supports multiple compression codecs configured via
 | `zstd`   | Zstandard compression. Best ratio, configurable level. |
 | `lz4`    | LZ4 compression. Fast with good ratio.                 |
 | `snappy` | Snappy compression. Fastest, lower ratio.              |
-| `none`   | No compression.                                        |
+
+`spark.shuffle.compress=false` turns compression off entirely; `none` is not a value the codec
+config accepts.
 
 The compression codec is applied uniformly to all partitions. Each partition's data is
 independently compressed, allowing parallel decompression during reads.
 
 ## Configuration
 
-| Config                                       | Default | Description                              |
-| -------------------------------------------- | ------- | ---------------------------------------- |
-| `spark.comet.shuffle.enabled`                | `true`  | Enable Comet shuffle                     |
-| `spark.comet.shuffle.mode`                   | `auto`  | Shuffle mode: `native`, `jvm`, or `auto` |
-| `spark.comet.shuffle.compression.codec`      | `zstd`  | Compression codec                        |
-| `spark.comet.shuffle.compression.zstd.level` | `1`     | Zstd compression level                   |
-| `spark.comet.shuffle.native.writeBufferSize` | `1MB`   | Write buffer size                        |
-| `spark.comet.shuffle.jvm.batchSize`          | `8192`  | Target rows per batch                    |
+| Config                                                              | Default | Description                                                                    |
+| ------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------ |
+| `spark.comet.shuffle.enabled`                                       | `true`  | Enable Comet shuffle                                                           |
+| `spark.comet.shuffle.mode`                                          | `auto`  | Shuffle mode: `native`, `jvm`, or `auto`                                       |
+| `spark.comet.shuffle.native.partitioning.hash.enabled`              | `true`  | Allow native shuffle for `HashPartitioning`                                    |
+| `spark.comet.shuffle.native.partitioning.range.enabled`             | `true`  | Allow native shuffle for `RangePartitioning`                                   |
+| `spark.comet.shuffle.native.partitioning.roundrobin.enabled`        | `false` | Allow native shuffle for `RoundRobinPartitioning`                              |
+| `spark.comet.shuffle.native.partitioning.roundrobin.maxHashColumns` | `0`     | Leading columns to hash for round robin; `0` hashes all columns                |
+| `spark.comet.shuffle.compression.codec`                             | `lz4`   | Compression codec: `zstd`, `lz4`, or `snappy`                                  |
+| `spark.comet.shuffle.compression.zstd.level`                        | `1`     | Zstd compression level                                                         |
+| `spark.comet.shuffle.native.writeBufferSize`                        | `1MB`   | Write buffer size for local shuffle files                                      |
+| `spark.comet.shuffle.native.maxBufferBytes`                         | `0`     | Bytes buffered before spilling; `0` leaves memory pressure as the only trigger |
+| `spark.comet.shuffle.directRead.enabled`                            | `true`  | Read shuffle blocks in native code, bypassing Arrow FFI                        |
+| `spark.comet.shuffle.rss.maxFrameBytes`                             | `64MB`  | Largest encoded block pushed to a remote shuffle service                       |
+| `spark.comet.shuffle.rss.maxInFlightBytes`                          | `512MB` | Shuffle bytes admitted concurrently per executor-side remote shuffle client    |
+| `spark.comet.batchSize`                                             | `8192`  | Target rows per batch in native shuffle output                                 |
 
 ## Comparison with JVM Shuffle
 
@@ -264,6 +307,6 @@ independently compressed, allowing parallel decompression during reads.
 | Supported schemes   | Hash, Range, Single, RoundRobin        | Hash, Range, Single, RoundRobin   |
 | Partition key types | Primitives only (Hash, Range)          | Any type                          |
 | Performance         | Higher (no format conversion)          | Lower (columnar→row→columnar)     |
-| Writer variants     | Single path                            | Bypass (hash) and sort-based      |
+| Writer variants     | Local files or remote shuffle push     | Bypass (hash) and sort-based      |
 
 See [JVM Shuffle](jvm_shuffle.md) for details on the JVM-based implementation.
