@@ -152,8 +152,8 @@ private object MapBuilderSupport {
   val floatingPointKeyNote: String =
     "Spark normalizes a floating-point map key, so a `-0.0` key is stored as `+0.0` and all " +
       "`NaN` keys collapse into one. Comet's native map construction compares the raw Arrow " +
-      "values, so `-0.0` and `+0.0` keys stay distinct instead of being reported as a duplicate " +
-      s"key. Set `${COMET_EXEC_STRICT_FLOATING_POINT.key}=true` to fall back to Spark for a " +
+      "values, so `-0.0` and `+0.0` stay distinct keys rather than a duplicate key. Set " +
+      s"`${COMET_EXEC_STRICT_FLOATING_POINT.key}=true` to fall back to Spark for a " +
       "floating-point map key."
 
   /** The support level for a map constructor whose result has key type `keyType`. */
