@@ -21,14 +21,13 @@ package org.apache.spark.sql.comet.execution.shuffle
 
 import java.io.{EOFException, InputStream}
 import java.nio.{ByteBuffer, ByteOrder}
-import java.nio.channels.{Channels, ReadableByteChannel}
 
 import scala.util.control.NonFatal
 
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-import org.apache.comet.{CometShuffleReadFailureHandler, Native}
+import org.apache.comet.{CometShuffleReadFailureHandler, Native, ShuffleBlockReads}
 import org.apache.comet.vector.NativeUtil
 
 /**
@@ -60,15 +59,9 @@ case class NativeBatchDecoderIterator(
 
   import NativeBatchDecoderIterator._
 
-  private val channel: ReadableByteChannel = if (in != null) {
-    Channels.newChannel(in)
-  } else {
-    null
-  }
-
   override def hasNext: Boolean = {
     synchronized {
-      if (channel == null || isClosed) {
+      if (in == null || isClosed) {
         return false
       }
       if (batch.isDefined) {
@@ -171,30 +164,25 @@ case class NativeBatchDecoderIterator(
 
   private def readNextBlock(): Option[(Int, ByteBuffer, Int)] = {
     // read compressed batch size from header
-    longBuf.clear()
-    while (longBuf.hasRemaining && channel.read(longBuf) >= 0) {}
+    val lengthBytes = ShuffleBlockReads.read(in, longBuf.array(), 8)
 
     // If we reach the end of the stream, we are done, or if we read partial length
     // then the stream is corrupted.
-    if (longBuf.hasRemaining) {
-      if (longBuf.position() == 0) {
+    if (lengthBytes < 8) {
+      if (lengthBytes == 0) {
         return None
       }
       throw new EOFException("Data corrupt: unexpected EOF while reading compressed ipc lengths")
     }
 
     // get compressed length (including headers)
-    longBuf.flip()
-    val compressedLength = longBuf.getLong
+    val compressedLength = longBuf.getLong(0)
 
     // read field count from header
-    longBuf.clear()
-    while (longBuf.hasRemaining && channel.read(longBuf) >= 0) {}
-    if (longBuf.hasRemaining) {
+    if (ShuffleBlockReads.read(in, longBuf.array(), 8) < 8) {
       throw new EOFException("Data corrupt: unexpected EOF while reading field count")
     }
-    longBuf.flip()
-    val fieldCount = longBuf.getLong.toInt
+    val fieldCount = longBuf.getLong(0).toInt
 
     // read body
     val bytesToRead = compressedLength - 8
@@ -214,8 +202,9 @@ case class NativeBatchDecoderIterator(
     }
     dataBuf.clear()
     dataBuf.limit(bytesToRead.toInt)
-    while (dataBuf.hasRemaining && channel.read(dataBuf) >= 0) {}
-    if (dataBuf.hasRemaining) {
+    val bodyBytes =
+      ShuffleBlockReads.read(in, threadLocalScratch.get(), dataBuf, bytesToRead.toInt)
+    if (bodyBytes < bytesToRead) {
       throw new EOFException("Data corrupt: unexpected EOF while reading compressed batch")
     }
 
@@ -264,6 +253,10 @@ object NativeBatchDecoderIterator {
   private val threadLocalDataBuf: ThreadLocal[ByteBuffer] = ThreadLocal.withInitial(() => {
     ByteBuffer.allocateDirect(INITIAL_BUFFER_SIZE)
   })
+
+  // one iterator is built per block, so the read scratch is per thread rather than per iterator
+  private val threadLocalScratch: ThreadLocal[Array[Byte]] =
+    ThreadLocal.withInitial(() => new Array[Byte](ShuffleBlockReads.MAX_READ))
 
   private def resetDataBuf(): Unit = {
     if (threadLocalDataBuf.get().capacity() > INITIAL_BUFFER_SIZE) {
